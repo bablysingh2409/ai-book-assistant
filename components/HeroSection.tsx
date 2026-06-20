@@ -21,7 +21,7 @@ const HeroSection = () => {
   ]
 
   return (
-    <section className="wrapper pt-28">
+    <section className="wrapper mb-10 md:mb-16">
       <div className="library-hero-card">
         <div className="library-hero-content">
           {/* Left Section */}
