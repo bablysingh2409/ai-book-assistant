@@ -2,7 +2,9 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/utils';
+import { Show, SignInButton, UserButton, useUser } from '@clerk/nextjs'
+
 const navItems=[
     {label:'Library',href:'/'},
     {label:'Add New', href:'/books/new'},
@@ -10,6 +12,7 @@ const navItems=[
 
 const Navbar = () => {
     const pathName=usePathname();
+    const {user}=useUser();
   return (
     <header className="w-full fixed z-50 bg-('--bg-primary')">
       <div className="wrapper navbar-height py-4 flex justify-between items-center">
@@ -29,6 +32,22 @@ const Navbar = () => {
                     </Link>
                 );
             })}
+            <div className='flex gap-7.5 items-center'>
+            <Show when="signed-out">
+                <SignInButton mode="modal"/>
+            </Show>
+            <Show when="signed-in">
+                <div className='nav-use-link flex gap-2 items-center'>
+                <UserButton/>
+                {user?.firstName && (
+                    <Link href='/subscriptions' className='nav-user-name'>
+                        {user.firstName}
+                    </Link>
+                )
+                }
+                </div>
+            </Show>
+            </div>
         </nav>
 
       </div>
