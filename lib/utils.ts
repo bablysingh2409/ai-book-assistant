@@ -1,4 +1,4 @@
-import { TextSegment } from '@/types';
+import { TextSegment } from '@/lib/types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { DEFAULT_VOICE, voiceOptions } from './constants';
@@ -121,10 +121,13 @@ export async function parsePDFFile(file: File) {
       throw new Error('Could not get canvas context');
     }
 
-    await firstPage.render({
+    const renderTask = firstPage.render({
+      canvas,
       canvasContext: context,
-      viewport: viewport,
-    }).promise;
+      viewport,
+    });
+
+    await renderTask.promise;
 
     // Convert canvas to data URL
     const coverDataURL = canvas.toDataURL('image/png');
@@ -146,7 +149,10 @@ export async function parsePDFFile(file: File) {
     const segments = splitIntoSegments(fullText);
 
     // Clean up PDF document resources
-    await pdfDocument.destroy();
+    const destroyPdf = (pdfDocument as unknown as { destroy?: () => Promise<void> }).destroy;
+    if (typeof destroyPdf === 'function') {
+      await destroyPdf();
+    }
 
     return {
       content: segments,
