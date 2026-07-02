@@ -12,11 +12,21 @@ import {ACCEPTED_IMAGE_TYPES, DEFAULT_VOICE,ACCEPTED_PDF_TYPES} from '@/lib/cons
 import  FileUploader  from '@/components/FileUploader';
 import  VoiceSelector  from '@/components/VoiceSelector';
 import  LoadingOverlay  from '@/components/LoadingOverlay';
+import { useAuth } from '@clerk/nextjs';
+import { toast } from 'sonner';
+import { checkBookExists, savedBookSegments } from '@/lib/actions/book.actions';
+import { useRouter } from 'next/navigation';
+import { parsePDFFile } from '@/lib/utils';
+import {upload} from '@vercel/blob/client';
+import { createBook } from '@/lib/actions/book.actions';
 
 
 function UploadForm() {
  const [isSubmitting,setIsSubmitting] = useState(false);
  const [isMounted, setIsMounted] = useState(false);
+
+ const {userId} = useAuth();
+ const router = useRouter();
 
   useEffect(() => {
     setIsMounted(true);
@@ -27,15 +37,104 @@ function UploadForm() {
     defaultValues: {
         title: '',
         author: '',
-      voice: DEFAULT_VOICE,
+        persona: '',
+        pdfFile: undefined,
+        coverImage: undefined,
     },
   });
 
   const onSubmit = async (data: BookUploadFormValues) => {
+    console.log('Form data:', data);
+    if(!userId) {
+     return toast.error('Please login to upload books');
+    }
+
+    console.log('Submitting form with data:', data);
     setIsSubmitting(true)
-      await new Promise((resolve) => setTimeout(resolve, 3000))
-      setIsSubmitting(false)
-      console.log('Form submitted:', data)
+      try{
+        const existsCheck=await checkBookExists(data.title);
+        if(existsCheck?.exists && existsCheck.book){
+           toast.info('Book with same title already exists.');
+           form.reset();
+           router.push(`/books/${existsCheck.book.slug}`);
+            return;
+        }
+
+        const fileTitle=data.title.replace(/\s+/g, '_').toLowerCase();
+        const pdfFile=data.pdfFile;
+
+        const parsePDF=await parsePDFFile(pdfFile);
+
+        if(parsePDF.content.length===0){
+          toast.error("Failed to parse PDF. Please try again with a different file");
+          return;
+        }
+
+        const uploadedPdfBlob=await upload(fileTitle , pdfFile , {
+          access:'public',
+          handleUploadUrl:'/api/upload',
+          contentType:'application/pdf'
+        })
+
+        let coverUrl:string;
+        
+        if(data.coverImage){
+          const coverFile=data.coverImage;
+          const uploadedCoverBlob=await upload(`${fileTitle}_cover.png` , coverFile , {
+            access:'public',
+            handleUploadUrl:'/api/upload',
+            contentType:coverFile.type
+          })
+          coverUrl=uploadedCoverBlob.url;
+        }else{
+
+          const response=await fetch(parsePDF.cover);
+          const blob=await response.blob();
+
+          const uploadedCoverBlob=await upload(`${fileTitle}_cover.png` , blob , {
+            access:'public',
+            handleUploadUrl:'/api/upload',
+            contentType:'image/png'
+          })
+          coverUrl=uploadedCoverBlob.url;
+        }
+
+        const book=await createBook({
+          clerkId:userId,
+          title:data.title,
+          author:data.author,
+          persona:data.persona,
+          fileURL:uploadedPdfBlob.url,
+          fileBlobKey:uploadedPdfBlob.pathname,
+          coverURL:coverUrl,
+          fileSize:pdfFile.size,
+        });
+
+        if(!book.success) throw new Error('Failed to create book');
+
+        if(book.alreadyExists){
+           toast.info('Book with same title already exists.');
+           form.reset();
+           router.push(`/books/${existsCheck.book.slug}`);
+            return;
+        }
+
+        const segments=await savedBookSegments(book.data._id, userId, parsePDF.content);
+
+        if(!segments.success) {
+          toast.error('Failed to save book segments.');
+          throw new Error('Failed to save book segments');
+
+        }
+
+        form.reset();
+        router.push('/')
+      }catch(error){
+        console.log(error);
+        toast.error('Failed to upload book. Please try again.');
+      }finally{
+        setIsSubmitting(false);
+      }
   }
   if(!isMounted) return null
 
@@ -50,7 +149,7 @@ function UploadForm() {
             {/* Book PDF File Uploader */}
             <FileUploader
             control={form.control}
-            name="bookFile"
+            name="pdfFile"
             label="Book PDF File"
             acceptTypes={ACCEPTED_PDF_TYPES}
             icon={Upload}
@@ -62,7 +161,7 @@ function UploadForm() {
             {/* Book Image Uploader */}
             <FileUploader
             control={form.control}
-            name="bookImage"
+            name="coverImage"
             label="Cover Image (Optional)"
             acceptTypes={ACCEPTED_IMAGE_TYPES}
             icon={ImageIcon}
@@ -114,7 +213,7 @@ function UploadForm() {
             {/* Voice Selector */}
             <FormField
             control={form.control}
-            name="voice"
+            name="persona"
             render={({ field }) => (
                 <FormItem>
                 <FormLabel className="form-label">Choose Assistant Voice</FormLabel>
