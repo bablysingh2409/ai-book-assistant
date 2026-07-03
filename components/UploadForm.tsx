@@ -8,7 +8,7 @@ import { BookUploadFormValues } from '@/lib/types';
 import {Form,FormControl,FormField,FormItem,FormLabel,FormMessage} from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import {ACCEPTED_IMAGE_TYPES, DEFAULT_VOICE,ACCEPTED_PDF_TYPES} from '@/lib/constants';
+import {ACCEPTED_IMAGE_TYPES,ACCEPTED_PDF_TYPES} from '@/lib/constants';
 import  FileUploader  from '@/components/FileUploader';
 import  VoiceSelector  from '@/components/VoiceSelector';
 import  LoadingOverlay  from '@/components/LoadingOverlay';
@@ -44,12 +44,10 @@ function UploadForm() {
   });
 
   const onSubmit = async (data: BookUploadFormValues) => {
-    console.log('Form data:', data);
     if(!userId) {
      return toast.error('Please login to upload books');
     }
 
-    console.log('Submitting form with data:', data);
     setIsSubmitting(true)
       try{
         const existsCheck=await checkBookExists(data.title);

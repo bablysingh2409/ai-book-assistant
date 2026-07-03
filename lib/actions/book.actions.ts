@@ -24,11 +24,11 @@ export const checkBookExists = async (title: string) => {
         exists: false
     }
   }
-  catch (error) {
-    console.error('Error checking book exists:', error);
+  catch (e) {
+    console.error('Error checking book exists:', e);
     return {
       success: false,
-      error
+      error: e instanceof Error ? e.message : "Unknown error"
     }
   }
 }
@@ -56,11 +56,11 @@ export const createBook = async (data: CreateBook) => {
     };
 
   }
-  catch (error) {
-    console.error('Error creating book:', error);
+  catch (e) {
+    console.error('Error creating book:', e);
     return {
         success: false,
-        error
+        error:e instanceof Error ? e.message : "Unknown error"
     }
   } 
 }
@@ -91,7 +91,7 @@ export const savedBookSegments = async (bookId: string, clerkId: string, segment
     console.log(`Deleted book and segments and book due to failure to save segments`);
     return {
         success:false,
-        error:e
+        error:e instanceof Error ? e.message : "Unknown error"
     }
    }
 } 
