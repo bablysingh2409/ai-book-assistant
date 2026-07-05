@@ -15,7 +15,7 @@ function VapiControls({ book }: { book: IBook }) {
     duration,
     start,
     stop,
-    clearErrors,
+    // clearErrors,
   } = useVapi(book);
 
   return (
