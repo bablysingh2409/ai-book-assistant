@@ -7,8 +7,6 @@ import Book from "@/database/models/book.model";
 import BookSegment from "@/database/models/bookSegment.model";
 import mongoose from "mongoose";
 import { revalidatePath } from "next/cache";
-import { PLAN_LIMITS } from "../subscription-constants";
-import { getUserPlan } from "../subscription.server";
 
 export const getBookBySlug = async (slug: string) => {
   try {
@@ -33,10 +31,20 @@ export const getBookBySlug = async (slug: string) => {
   }
 };
 
-export const getAllBooks = async () => {
+export const getAllBooks = async (search?: string) => {
   try {
     await connectToDatabase();
-    const books = await Book.find().sort({ createdAt: -1 }).lean();
+    let query = {};
+
+    if (search) {
+      const escapedSearch = escapeRegex(search);
+      const regex = new RegExp(escapedSearch, "i");
+      query = {
+        $or: [{ title: { $regex: regex } }, { author: { $regex: regex } }],
+      };
+    }
+
+    const books = await Book.find(query).sort({ createdAt: -1 }).lean();
     return {
       success: true,
       data: serializeData(books),
@@ -93,10 +101,17 @@ export const createBook = async (data: CreateBook) => {
     const { getUserPlan } = await import("@/lib/subscription.server");
     const { PLAN_LIMITS } = await import("@/lib/subscription-constants");
 
+    const { auth } = await import("@clerk/nextjs/server");
+    const { userId } = await auth();
+
+    if (!userId || userId !== data.clerkId) {
+      return { success: false, error: "Unauthorized" };
+    }
+
     const plan = await getUserPlan();
     const limits = PLAN_LIMITS[plan];
 
-    const bookCount = await Book.countDocuments({ clerkId: data.clerkId });
+    const bookCount = await Book.countDocuments({ clerkId: userId });
 
     if (bookCount >= limits.maxBooks) {
       const { revalidatePath } = await import("next/cache");
@@ -108,7 +123,12 @@ export const createBook = async (data: CreateBook) => {
         isBillingError: true,
       };
     }
-    const book = await Book.create({ ...data, slug, totalSegments: 0 });
+    const book = await Book.create({
+      ...data,
+      clerkId: userId,
+      slug,
+      totalSegments: 0,
+    });
 
     revalidatePath("/");
 
