@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { connectToDatabase } from "@/database/mongoose";
 import { CreateBook, TextSegment } from "../types";
@@ -6,31 +6,32 @@ import { escapeRegex, generateSlug, serializeData } from "../utils";
 import Book from "@/database/models/book.model";
 import BookSegment from "@/database/models/bookSegment.model";
 import mongoose from "mongoose";
-import {revalidatePath} from "next/cache"
-
+import { revalidatePath } from "next/cache";
+import { PLAN_LIMITS } from "../subscription-constants";
+import { getUserPlan } from "../subscription.server";
 
 export const getBookBySlug = async (slug: string) => {
-    try {
-        await connectToDatabase();
+  try {
+    await connectToDatabase();
 
-        const book = await Book.findOne({ slug }).lean();
+    const book = await Book.findOne({ slug }).lean();
 
-        if (!book) {
-            return { success: false, error: 'Book not found' };
-        }
-
-        return {
-            success: true,
-            data: serializeData(book)
-        }
-    } catch (e) {
-        console.error('Error fetching book by slug', e);
-        return {
-            success: false, error: e
-        }
+    if (!book) {
+      return { success: false, error: "Book not found" };
     }
-}
 
+    return {
+      success: true,
+      data: serializeData(book),
+    };
+  } catch (e) {
+    console.error("Error fetching book by slug", e);
+    return {
+      success: false,
+      error: e,
+    };
+  }
+};
 
 export const getAllBooks = async () => {
   try {
@@ -38,13 +39,13 @@ export const getAllBooks = async () => {
     const books = await Book.find().sort({ createdAt: -1 }).lean();
     return {
       success: true,
-      data:serializeData(books)
+      data: serializeData(books),
     };
   } catch (error) {
-    console.error('Error fetching all books:', error);
+    console.error("Error fetching all books:", error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Unknown error"
+      error: error instanceof Error ? error.message : "Unknown error",
     };
   }
 };
@@ -59,149 +60,177 @@ export const checkBookExists = async (title: string) => {
     if (existingBook) {
       return {
         book: serializeData(existingBook),
-        exists: true
+        exists: true,
       };
     }
     return {
-        exists: false
-    }
-  }
-  catch (e) {
-    console.error('Error checking book exists:', e);
+      exists: false,
+    };
+  } catch (e) {
+    console.error("Error checking book exists:", e);
     return {
       success: false,
-      error: e instanceof Error ? e.message : "Unknown error"
-    }
+      error: e instanceof Error ? e.message : "Unknown error",
+    };
   }
-}
+};
 
 export const createBook = async (data: CreateBook) => {
   try {
     await connectToDatabase();
-    const slug=generateSlug(data.title);
+    const slug = generateSlug(data.title);
 
     const existingBook = await Book.findOne({ slug }).lean();
 
     if (existingBook) {
       return {
         success: true,
-        data:serializeData(existingBook),
-        alreadyExists: true
+        data: serializeData(existingBook),
+        alreadyExists: true,
       };
     }
 
-    const book=await Book.create({...data,slug,totalSegments:0});
+    const { getUserPlan } = await import("@/lib/subscription.server");
+    const { PLAN_LIMITS } = await import("@/lib/subscription-constants");
 
-    revalidatePath('/')
+    const plan = await getUserPlan();
+    const limits = PLAN_LIMITS[plan];
 
+    const bookCount = await Book.countDocuments({ clerkId: data.clerkId });
+
+    if (bookCount >= limits.maxBooks) {
+      const { revalidatePath } = await import("next/cache");
+      revalidatePath("/");
+
+      return {
+        success: false,
+        error: `You have reached the maximum number of books allowed for your ${plan} plan (${limits.maxBooks}). Please upgrade to add more books.`,
+        isBillingError: true,
+      };
+    }
+    const book = await Book.create({ ...data, slug, totalSegments: 0 });
+
+    revalidatePath("/");
 
     return {
       success: true,
       data: serializeData(book),
     };
-
+  } catch (e) {
+    console.error("Error creating book:", e);
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Unknown error",
+    };
   }
-  catch (e) {
-    console.error('Error creating book:', e);
-    return {
-        success: false,
-        error:e instanceof Error ? e.message : "Unknown error"
-    }
-  } 
-}
-
-export const savedBookSegments = async (bookId: string, clerkId: string, segments:TextSegment[])=>{
-   try {
-    await connectToDatabase();
-    console.log('saving book segments....');
-
-    const segmentsToInsert= segments.map(({text,segmentIndex,pageNumber,wordCount})=>({
-        clerkId,bookId,content:text,segmentIndex,pageNumber,wordCount
-    }));
-
-    await BookSegment.insertMany(segmentsToInsert);
-    await Book.findByIdAndUpdate(bookId,{totalSegments:segments.length});
-
-    console.log('book segments saved successfully');
-
-    return {
-        success:true,
-        data:{segmentsCreated:segments.length},
-    }
-
-   }catch(e){
-    console.error('Error saving book segments:', e);
-    await BookSegment.deleteMany({ bookId });
-    await Book.findByIdAndDelete(bookId);
-    console.log(`Deleted book and segments and book due to failure to save segments`);
-    return {
-        success:false,
-        error:e instanceof Error ? e.message : "Unknown error"
-    }
-   }
-} 
-
-
-// Searches book segments using MongoDB text search with regex fallback
-export const searchBookSegments = async (bookId: string, query: string, limit: number = 5) => {
-    try {
-        await connectToDatabase();
-
-        console.log(`Searching for: "${query}" in book ${bookId}`);
-
-        const bookObjectId = new mongoose.Types.ObjectId(bookId);
-
-        // Try MongoDB text search first (requires text index)
-        let segments: Record<string, unknown>[] = [];
-        try {
-            segments = await BookSegment.find({
-                bookId: bookObjectId,
-                $text: { $search: query },
-            })
-                .select('_id bookId content segmentIndex pageNumber wordCount')
-                .sort({ score: { $meta: 'textScore' } })
-                .limit(limit)
-                .lean();
-        } catch {
-            // Text index may not exist — fall through to regex fallback
-            segments = [];
-        }
-
-        // Fallback: regex search matching ANY keyword
-        if (segments.length === 0) {
-            const keywords = query.split(/\s+/).filter((k) => k.length > 2);
-            const pattern = keywords.map(escapeRegex).join('|');
-
-            if(keywords.length===0){
-              return {
-                success:true,
-                data:[]
-              }
-            }
-
-            segments = await BookSegment.find({
-                bookId: bookObjectId,
-                content: { $regex: pattern, $options: 'i' },
-            })
-                .select('_id bookId content segmentIndex pageNumber wordCount')
-                .sort({ segmentIndex: 1 })
-                .limit(limit)
-                .lean();
-        }
-
-        console.log(`Search complete. Found ${segments.length} results`);
-
-        return {
-            success: true,
-            data: serializeData(segments),
-        };
-    } catch (error) {
-        console.error('Error searching segments:', error);
-        return {
-            success: false,
-            error: (error as Error).message,
-            data: [],
-        };
-    }
 };
 
+export const savedBookSegments = async (
+  bookId: string,
+  clerkId: string,
+  segments: TextSegment[],
+) => {
+  try {
+    await connectToDatabase();
+    console.log("saving book segments....");
+
+    const segmentsToInsert = segments.map(
+      ({ text, segmentIndex, pageNumber, wordCount }) => ({
+        clerkId,
+        bookId,
+        content: text,
+        segmentIndex,
+        pageNumber,
+        wordCount,
+      }),
+    );
+
+    await BookSegment.insertMany(segmentsToInsert);
+    await Book.findByIdAndUpdate(bookId, { totalSegments: segments.length });
+
+    console.log("book segments saved successfully");
+
+    return {
+      success: true,
+      data: { segmentsCreated: segments.length },
+    };
+  } catch (e) {
+    console.error("Error saving book segments:", e);
+    await BookSegment.deleteMany({ bookId });
+    await Book.findByIdAndDelete(bookId);
+    console.log(
+      `Deleted book and segments and book due to failure to save segments`,
+    );
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Unknown error",
+    };
+  }
+};
+
+// Searches book segments using MongoDB text search with regex fallback
+export const searchBookSegments = async (
+  bookId: string,
+  query: string,
+  limit: number = 5,
+) => {
+  try {
+    await connectToDatabase();
+
+    console.log(`Searching for: "${query}" in book ${bookId}`);
+
+    const bookObjectId = new mongoose.Types.ObjectId(bookId);
+
+    // Try MongoDB text search first (requires text index)
+    let segments: Record<string, unknown>[] = [];
+    try {
+      segments = await BookSegment.find({
+        bookId: bookObjectId,
+        $text: { $search: query },
+      })
+        .select("_id bookId content segmentIndex pageNumber wordCount")
+        .sort({ score: { $meta: "textScore" } })
+        .limit(limit)
+        .lean();
+    } catch {
+      // Text index may not exist — fall through to regex fallback
+      segments = [];
+    }
+
+    // Fallback: regex search matching ANY keyword
+    if (segments.length === 0) {
+      const keywords = query.split(/\s+/).filter((k) => k.length > 2);
+      const pattern = keywords.map(escapeRegex).join("|");
+
+      if (keywords.length === 0) {
+        return {
+          success: true,
+          data: [],
+        };
+      }
+
+      segments = await BookSegment.find({
+        bookId: bookObjectId,
+        content: { $regex: pattern, $options: "i" },
+      })
+        .select("_id bookId content segmentIndex pageNumber wordCount")
+        .sort({ segmentIndex: 1 })
+        .limit(limit)
+        .lean();
+    }
+
+    console.log(`Search complete. Found ${segments.length} results`);
+
+    return {
+      success: true,
+      data: serializeData(segments),
+    };
+  } catch (error) {
+    console.error("Error searching segments:", error);
+    return {
+      success: false,
+      error: (error as Error).message,
+      data: [],
+    };
+  }
+};
